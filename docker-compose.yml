@@ -1,0 +1,122 @@
+version: '3'
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - chat-network
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_CONFLUENT_LICENSE_TOPIC_REPLICATION_FACTOR: 1 # Good for single broker
+      KAFKA_CONFLUENT_BALANCER_TOPIC_REPLICATION_FACTOR: 1 # Good for single broker
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1 # Crucial for single broker
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1 # Crucial for single broker
+    networks:
+      - chat-network
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka:29092 --list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - chat-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:latest
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - chat-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      
+  chat-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chat-server
+    ports:
+      - "3000:3000"
+    depends_on:
+      - mongodb
+      - redis
+      - kafka
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017/chat_app
+      - REDIS_HOST=redis
+      - KAFKA_BROKERS=kafka:29092
+      - JWT_SECRET=super_secret_key
+      - KAFKAJS_NO_PARTITIONER_WARNING=1
+      - TOPIC_PREFIX=chat_room_
+    volumes:
+      - ./public:/app/public
+    networks:
+      - chat-network
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+  #   container_name: frontend
+  #   ports:
+  #     - "3001:3000"
+  #   environment:
+  #     - NEXT_PUBLIC_API_URL=http://localhost:3000
+  #   volumes:
+  #     - ./frontend:/app
+  #     - /app/node_modules
+  #     - /app/.next
+  #   networks:
+  #     - chat-network
+  #   depends_on:
+  #     - chat-server
+
+networks:
+  chat-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
